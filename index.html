@@ -73,7 +73,7 @@
             const drivers = await response.json();
             return drivers.map(driver => ({
                 ...driver,
-                headshotUrl: driver.headshot_url,
+                headshotUrl: driver.headshot_url || 'https://avatar.iran.liara.run/public',
                 teamColor: `#${driver.team_colour}`
             }));
         }
