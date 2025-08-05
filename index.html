@@ -68,6 +68,19 @@
             return latestMeeting.meeting_name;
         }
 
+        async function fetchBatch(urls) {
+            const results = [];
+            for (let i = 0; i < urls.length; i += 10) {
+                const batch = urls.slice(i, i + 10);
+                const responses = await Promise.all(batch.map(url => fetch(url).then(res => res.json())));
+                results.push(...responses);
+                if (i + 10 < urls.length) {
+                    await new Promise(resolve => setTimeout(resolve, 1000)); // Wait 1 second
+                }
+            }
+            return results;
+        }
+
         async function fetchDrivers() {
             const response = await fetch('https://api.openf1.org/v1/drivers?session_key=latest');
             const drivers = await response.json();
@@ -78,30 +91,32 @@
             }));
         }
 
-        async function fetchSessionDetails(sessionKey) {
-            const response = await fetch(`https://api.openf1.org/v1/sessions?session_key=${sessionKey}`);
-            const sessions = await response.json();
-            const session = sessions[0];
-            return {
-                name: session?.session_name || `Session ${sessionKey}`,
-                type: session?.session_type || 'Unknown Type'
-            };
-        }
-
-        async function fetchRadioExchanges(driverNumber) {
-            const response = await fetch(`https://api.openf1.org/v1/team_radio?session_key=latest&driver_number=${driverNumber}`);
-            const radios = await response.json();
-
-            // Group by session_key
-            const groupedRadios = radios.reduce((acc, radio) => {
-                if (!acc[radio.session_key]) {
-                    acc[radio.session_key] = [];
-                }
-                acc[radio.session_key].push(radio);
+        async function fetchSessionDetailsBatch(sessionKeys) {
+            const urls = sessionKeys.map(key => `https://api.openf1.org/v1/sessions?session_key=${key}`);
+            const sessions = await fetchBatch(urls);
+            return sessions.reduce((acc, session, index) => {
+                acc[sessionKeys[index]] = {
+                    name: session[0]?.session_name || `Session ${sessionKeys[index]}`,
+                    type: session[0]?.session_type || 'Unknown Type'
+                };
                 return acc;
             }, {});
+        }
 
-            return groupedRadios;
+        async function fetchRadioExchangesBatch(driverNumbers) {
+            const urls = driverNumbers.map(number => `https://api.openf1.org/v1/team_radio?session_key=latest&driver_number=${number}`);
+            const radios = await fetchBatch(urls);
+            return driverNumbers.reduce((acc, number, index) => {
+                const groupedRadios = radios[index].reduce((group, radio) => {
+                    if (!group[radio.session_key]) {
+                        group[radio.session_key] = [];
+                    }
+                    group[radio.session_key].push(radio);
+                    return group;
+                }, {});
+                acc[number] = groupedRadios;
+                return acc;
+            }, {});
         }
 
         async function loadContent() {
@@ -114,6 +129,11 @@
                 raceNameDiv.textContent = `Recent Race: ${raceName}`;
 
                 const drivers = await fetchDrivers();
+                const driverNumbers = drivers.map(driver => driver.driver_number);
+
+                const radioExchanges = await fetchRadioExchangesBatch(driverNumbers);
+                const sessionKeys = [...new Set(Object.values(radioExchanges).flatMap(radios => Object.keys(radios)))];
+                const sessionDetails = await fetchSessionDetailsBatch(sessionKeys);
 
                 for (const driver of drivers) {
                     const driverDiv = document.createElement('div');
@@ -135,18 +155,16 @@
                     driverHeader.appendChild(driverName);
                     driverDiv.appendChild(driverHeader);
 
-                    const groupedRadios = await fetchRadioExchanges(driver.driver_number);
+                    const groupedRadios = radioExchanges[driver.driver_number];
 
-                    if (Object.keys(groupedRadios).length > 0) {
+                    if (groupedRadios && Object.keys(groupedRadios).length > 0) {
                         for (const [sessionKey, radios] of Object.entries(groupedRadios)) {
                             const sessionDiv = document.createElement('div');
                             sessionDiv.className = 'session mt-4';
 
-                            const sessionDetails = await fetchSessionDetails(sessionKey);
-
                             const sessionHeader = document.createElement('h3');
                             sessionHeader.className = 'text-lg font-medium';
-                            sessionHeader.textContent = `Session: ${sessionDetails.name} (${sessionDetails.type})`;
+                            sessionHeader.textContent = `Session: ${sessionDetails[sessionKey].name} (${sessionDetails[sessionKey].type})`;
                             sessionDiv.appendChild(sessionHeader);
 
                             radios.forEach(radio => {
